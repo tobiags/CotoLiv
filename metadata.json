@@ -1,0 +1,6 @@
+{
+  "name": "CotoLiv",
+  "description": "Interface de suivi en direct sur Google Maps des itinéraires de livreurs de colis à Cotonou, Bénin.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
