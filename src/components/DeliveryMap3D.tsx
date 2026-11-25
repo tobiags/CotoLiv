@@ -27,7 +27,6 @@ import {formatDistanceFr, formatDurationFr} from '../utils/routeTracking';
 import {
   computeDashedRibbonSegments,
   createRouteProjection3D,
-  generateCotonouUrbanLayout,
   metersToSceneUnits,
   projectLatLngTo3D,
   type Point3D,
@@ -36,11 +35,11 @@ import {createProceduralTextureSet} from '../three/proceduralTextures';
 import {
   createCourierMotoGroup,
   createCourierVanGroup,
-  createDestinationLandmarkGroup,
-  createOriginHubGroup,
-  createWaypointPylonGroup,
 } from '../three/proceduralModels';
 import {cn} from '../utils/cn';
+import {useMapGeography} from '../hooks/useMapGeography';
+import {createGeographicCity} from '../three/geographicCity';
+import type {MapGeography} from '../utils/mapGeography';
 
 interface DeliveryMap3DProps {
   order: DeliveryOrder;
@@ -283,14 +282,16 @@ export function DeliveryMap3D({
     );
   }, [route]);
 
+  const geography = useMapGeography(route);
+
   const isVan = order.courier.vehicle.toLowerCase().includes('fourgon');
 
   // Mutable refs read inside the WebGL loop so React updates NEVER tear down the renderer
   const stateRef = useRef({
     theme,
     projection,
+    geography: geography.data,
     courierState,
-    orderId: order.id,
     isVan,
     radiusMeters,
     isWithinProximity,
@@ -302,8 +303,8 @@ export function DeliveryMap3D({
   stateRef.current = {
     theme,
     projection,
+    geography: geography.data,
     courierState,
-    orderId: order.id,
     isVan,
     radiusMeters,
     isWithinProximity,
@@ -376,7 +377,7 @@ export function DeliveryMap3D({
     scene.environmentIntensity = 0.52;
 
     const camera = new THREE.PerspectiveCamera(42, width / height, 0.5, 480);
-    const initialZoomOut = width < 640 ? 1.32 : 1.0;
+    const initialZoomOut = Math.max(1, 1.3 / (width / height));
     camera.position.set(4 * initialZoomOut, 62 * initialZoomOut, 76 * initialZoomOut);
 
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -385,14 +386,12 @@ export function DeliveryMap3D({
     controls.maxPolarAngle = Math.PI / 2 - 0.1;
     controls.minPolarAngle = 0.22;
     controls.minDistance = 12;
-    controls.maxDistance = 165;
+    controls.maxDistance = 400;
     controls.target.set(0, 0, 0);
     controls.update();
 
     // Procedural texture set
-    const textures = createProceduralTextureSet(
-      renderer.capabilities.getMaxAnisotropy()
-    );
+    const textures = createProceduralTextureSet();
 
     // Three-point architectural outdoor lighting (Day/Night dynamically updated)
     const hemiLight = new THREE.HemisphereLight(0xeef6f2, 0xb8c2ba, 0.9);
@@ -418,10 +417,9 @@ export function DeliveryMap3D({
     rimLight.position.set(-48, 26, -42);
     scene.add(rimLight);
 
-    // Extended Cotonou Ground Plane
+    // Neutral ground: no invented streets or satellite texture.
     const groundMat = new THREE.MeshStandardMaterial({
-      map: textures.terrainLightMap,
-      roughnessMap: textures.terrainRoughnessMap,
+      color: 0xd4d9d1,
       roughness: 0.92,
       metalness: 0.04,
     });
@@ -430,35 +428,6 @@ export function DeliveryMap3D({
     groundMesh.position.y = 0;
     groundMesh.receiveShadow = true;
     scene.add(groundMesh);
-
-    // Atlantic Ocean (South coastline of Cotonou) + Fidjrossè Sand Beach Strip
-    const beachMat = new THREE.MeshStandardMaterial({
-      color: 0xe3d3b1,
-      roughness: 0.92,
-      metalness: 0.02,
-    });
-    const beachMesh = new THREE.Mesh(new THREE.PlaneGeometry(340, 12), beachMat);
-    beachMesh.rotation.x = -Math.PI / 2;
-    beachMesh.position.set(0, 0.015, 58);
-    scene.add(beachMesh);
-
-    const waterMat = new THREE.MeshStandardMaterial({
-      color: 0x1d6878,
-      bumpMap: textures.waterBumpMap,
-      bumpScale: 0.14,
-      roughness: 0.24,
-      metalness: 0.32,
-    });
-    const oceanMesh = new THREE.Mesh(new THREE.PlaneGeometry(340, 120), waterMat);
-    oceanMesh.rotation.x = -Math.PI / 2;
-    oceanMesh.position.set(0, 0.02, 122);
-    scene.add(oceanMesh);
-
-    // Lake Nokoué / Cotonou Lagoon (North)
-    const lagoonMesh = new THREE.Mesh(new THREE.PlaneGeometry(340, 90), waterMat);
-    lagoonMesh.rotation.x = -Math.PI / 2;
-    lagoonMesh.position.set(0, 0.02, -108);
-    scene.add(lagoonMesh);
 
     // Scene containers rebuilt cleanly only when the route changes
     const cityGroup = new THREE.Group();
@@ -469,31 +438,6 @@ export function DeliveryMap3D({
 
     const landmarksGroup = new THREE.Group();
     scene.add(landmarksGroup);
-
-    // Shared materials updated dynamically for Day/Night transitions
-    const buildingMat = new THREE.MeshStandardMaterial({
-      map: textures.buildingLightMap,
-      emissiveMap: textures.buildingEmissiveMap,
-      emissive: new THREE.Color(0xffd782),
-      emissiveIntensity: 0.0,
-      roughness: 0.72,
-      metalness: 0.08,
-    });
-    const roofUnitMat = new THREE.MeshStandardMaterial({
-      color: 0x9aa49e,
-      roughness: 0.65,
-      metalness: 0.35,
-    });
-    const trunkMat = new THREE.MeshStandardMaterial({
-      color: 0x7c5c3e,
-      roughness: 0.88,
-      metalness: 0.02,
-    });
-    const frondMat = new THREE.MeshStandardMaterial({
-      color: 0x246b45,
-      roughness: 0.68,
-      metalness: 0.05,
-    });
 
     const roadBaseMat = new THREE.MeshStandardMaterial({
       color: 0x2a332f,
@@ -588,7 +532,8 @@ export function DeliveryMap3D({
 
     // Track last built route & theme to avoid redundant geometry rebuilds
     let appliedTheme: ThemeMode | null = null;
-    let builtRouteSignature = '';
+    let builtProjection: typeof projection = null;
+    let builtGeography: MapGeography | null = null;
     let lastTraveledCount = -1;
     let lastRemainingCount = -1;
     let lastProgressHash = -1;
@@ -598,22 +543,10 @@ export function DeliveryMap3D({
       const isDark = mode === 'dark';
       const skyHex = isDark ? 0x091110 : 0xdce7e4;
       scene.background = new THREE.Color(skyHex);
-      scene.fog = new THREE.FogExp2(skyHex, isDark ? 0.0054 : 0.0044);
 
-      groundMat.map = isDark ? textures.terrainDarkMap : textures.terrainLightMap;
-      groundMat.needsUpdate = true;
+      groundMat.color.setHex(isDark ? 0x12221d : 0xd4d9d1);
 
-      beachMat.color.setHex(isDark ? 0x2d322b : 0xe3d3b1);
-      waterMat.color.setHex(isDark ? 0x0b2b36 : 0x1e6f80);
       roadBaseMat.color.setHex(isDark ? 0x18211f : 0x2f3934);
-
-      buildingMat.map = isDark
-        ? textures.buildingDarkMap
-        : textures.buildingLightMap;
-      buildingMat.emissiveIntensity = isDark ? 1.15 : 0.0;
-      buildingMat.needsUpdate = true;
-      roofUnitMat.color.setHex(isDark ? 0x2b3935 : 0x9aa49e);
-      frondMat.color.setHex(isDark ? 0x164a32 : 0x246b45);
 
       traveledMat.color.setHex(isDark ? 0x10b981 : 0x0f7852);
       traveledMat.emissiveIntensity = isDark ? 0.78 : 0.25;
@@ -638,155 +571,25 @@ export function DeliveryMap3D({
       const proj = stateRef.current.projection;
       if (!proj) return;
 
-      // Clear previous instanced city & landmarks
-      disposeGroup(cityGroup);
-      disposeGroup(landmarksGroup);
+      // Previous geometry is cleared by the projection-change handler.
       beaconOrbs = [];
-
-      const layout = generateCotonouUrbanLayout(proj, stateRef.current.orderId);
-
-      // Position coastline and lagoon relative to this route's extent
-      beachMesh.position.z = layout.oceanZ - 3;
-      oceanMesh.position.z = layout.oceanZ + 62;
-      lagoonMesh.position.z = layout.lagoonZ - 42;
-
-      // Build InstancedMesh for Cotonou urban buildings
-      const buildings = layout.buildings;
-      if (buildings.length > 0) {
-        const bGeo = new THREE.BoxGeometry(1, 1, 1);
-        bGeo.translate(0, 0.5, 0); // bottom-center pivot
-        const bInstanced = new THREE.InstancedMesh(
-          bGeo,
-          buildingMat,
-          buildings.length
-        );
-        bInstanced.castShadow = !isSoftwareGl;
-        bInstanced.receiveShadow = !isSoftwareGl;
-
-        const dayTones = [
-          new THREE.Color(0xf2f1eb),
-          new THREE.Color(0xe6eae5),
-          new THREE.Color(0xefe6d8),
-          new THREE.Color(0xdde4e0),
-          new THREE.Color(0xe8e3d9),
-        ];
-
-        const dummy = new THREE.Object3D();
-        const roofSpecs: {x: number; y: number; z: number; sx: number; sz: number}[] = [];
-
-        buildings.forEach((b, idx) => {
-          dummy.position.set(b.x, 0, b.z);
-          dummy.rotation.set(0, b.rotationY, 0);
-          dummy.scale.set(b.width, b.height, b.depth);
-          dummy.updateMatrix();
-          bInstanced.setMatrixAt(idx, dummy.matrix);
-          bInstanced.setColorAt(idx, dayTones[b.toneIndex % dayTones.length]);
-
-          if (b.hasRoofUnit) {
-            roofSpecs.push({
-              x: b.x,
-              y: b.height,
-              z: b.z,
-              sx: b.width * 0.42,
-              sz: b.depth * 0.42,
-            });
-          }
-        });
-        bInstanced.instanceMatrix.needsUpdate = true;
-        if (bInstanced.instanceColor) bInstanced.instanceColor.needsUpdate = true;
-        cityGroup.add(bInstanced);
-
-        if (roofSpecs.length > 0) {
-          const rGeo = new THREE.BoxGeometry(1, 0.45, 1);
-          rGeo.translate(0, 0.225, 0);
-          const rInstanced = new THREE.InstancedMesh(
-            rGeo,
-            roofUnitMat,
-            roofSpecs.length
-          );
-          roofSpecs.forEach((r, idx) => {
-            dummy.position.set(r.x, r.y, r.z);
-            dummy.rotation.set(0, 0, 0);
-            dummy.scale.set(r.sx, 1, r.sz);
-            dummy.updateMatrix();
-            rInstanced.setMatrixAt(idx, dummy.matrix);
-          });
-          rInstanced.instanceMatrix.needsUpdate = true;
-          cityGroup.add(rInstanced);
-        }
-      }
-
-      // Build InstancedMesh for Cotonou coastal palm trees (trunk + layered palm crown)
-      const palms = layout.palms;
-      if (palms.length > 0) {
-        const trunkGeo = new THREE.CylinderGeometry(0.11, 0.2, 2.7, 7);
-        trunkGeo.translate(0, 1.35, 0);
-        const trunkInstanced = new THREE.InstancedMesh(
-          trunkGeo,
-          trunkMat,
-          palms.length
-        );
-
-        const crownGeo = new THREE.ConeGeometry(1.3, 1.1, 7);
-        crownGeo.translate(0, 2.9, 0);
-        const crownInstanced = new THREE.InstancedMesh(
-          crownGeo,
-          frondMat,
-          palms.length
-        );
-
-        const crownUpperGeo = new THREE.ConeGeometry(0.92, 0.9, 7);
-        crownUpperGeo.translate(0, 3.35, 0);
-        const crownUpperInstanced = new THREE.InstancedMesh(
-          crownUpperGeo,
-          frondMat,
-          palms.length
-        );
-
-        const dummy = new THREE.Object3D();
-        palms.forEach((p, idx) => {
-          dummy.position.set(p.x, 0, p.z);
-          dummy.rotation.set(0, p.rotationY, 0);
-          dummy.scale.set(p.scale, p.scale, p.scale);
-          dummy.updateMatrix();
-          trunkInstanced.setMatrixAt(idx, dummy.matrix);
-          crownInstanced.setMatrixAt(idx, dummy.matrix);
-          crownUpperInstanced.setMatrixAt(idx, dummy.matrix);
-        });
-        trunkInstanced.instanceMatrix.needsUpdate = true;
-        crownInstanced.instanceMatrix.needsUpdate = true;
-        crownUpperInstanced.instanceMatrix.needsUpdate = true;
-        cityGroup.add(trunkInstanced, crownInstanced, crownUpperInstanced);
-      }
 
       // Build full asphalt road bed from real projected Google Maps polyline
       roadBaseMesh.geometry.dispose();
-      roadBaseMesh.geometry = buildRibbonGeometry(proj.path3D, 1.65, 0.07);
+      roadBaseMesh.geometry = buildRibbonGeometry(proj.path3D, 4 * proj.scaleToScene, 0.045);
 
-      // Build Composite 3D Landmarks
-      const originHub = createOriginHubGroup(textures.contactShadowMap);
-      originHub.position.set(proj.origin3D.x, 0, proj.origin3D.z);
-      landmarksGroup.add(originHub);
-
-      const destLandmark = createDestinationLandmarkGroup(
-        textures.contactShadowMap
-      );
-      destLandmark.position.set(proj.destination3D.x, 0, proj.destination3D.z);
-      landmarksGroup.add(destLandmark);
-
-      if (proj.waypoint3D) {
-        const waypointPylon = createWaypointPylonGroup(
-          textures.contactShadowMap
-        );
-        waypointPylon.position.set(proj.waypoint3D.x, 0, proj.waypoint3D.z);
-        landmarksGroup.add(waypointPylon);
+      // Delivery pins are UI annotations, never invented buildings.
+      for (const [point, color] of [
+        [proj.origin3D, 0x10b981], [proj.destination3D, 0xf2b94b],
+        ...(proj.waypoint3D ? [[proj.waypoint3D, 0x5eead4]] : []),
+      ] as [Point3D, number][]) {
+        const pin = new THREE.Mesh(new THREE.OctahedronGeometry(0.55),
+          new THREE.MeshBasicMaterial({color, depthTest: false}));
+        pin.position.set(point.x, 3.2, point.z);
+        pin.renderOrder = 10;
+        landmarksGroup.add(pin);
+        beaconOrbs.push(pin);
       }
-
-      landmarksGroup.traverse((obj) => {
-        if (obj.name === 'BeaconOrb') {
-          beaconOrbs.push(obj);
-        }
-      });
 
       // Reset progress ribbon caches
       lastTraveledCount = -1;
@@ -872,6 +675,7 @@ export function DeliveryMap3D({
       camera.aspect = nw / nh;
       camera.updateProjectionMatrix();
       renderer.setSize(nw, nh, false);
+      if (stateRef.current.cameraPreset === 'overview') stateRef.current.recenterRequested = true;
       renderer.render(scene, camera);
     });
     resizeObserver.observe(container);
@@ -894,12 +698,19 @@ export function DeliveryMap3D({
 
       // 2. Rebuild city + landmarks when route changes
       const proj = cur.projection;
-      const routeSig = proj
-        ? `${cur.orderId}:${proj.path3D.length}:${proj.origin3D.x.toFixed(2)}`
-        : '';
-      if (proj && routeSig !== builtRouteSignature) {
-        rebuildCityAndLandmarks();
-        builtRouteSignature = routeSig;
+      if (proj !== builtProjection) {
+        disposeGroup(cityGroup);
+        disposeGroup(landmarksGroup);
+        roadBaseMesh.visible = traveledMesh.visible = remainingMesh.visible = Boolean(proj);
+        if (proj) rebuildCityAndLandmarks();
+        builtProjection = proj;
+        builtGeography = null;
+        cur.recenterRequested = true;
+      }
+      if (cur.geography !== builtGeography) {
+        disposeGroup(cityGroup);
+        if (proj && cur.geography) cityGroup.add(createGeographicCity(cur.geography, proj));
+        builtGeography = cur.geography;
       }
 
       // 3. Update dual traveled/remaining route ribbons + courier + geofence ring
@@ -920,13 +731,15 @@ export function DeliveryMap3D({
           );
 
           traveledMesh.geometry.dispose();
-          traveledMesh.geometry = buildRibbonGeometry(traveled3D, 0.95, 0.16);
+          traveledMesh.geometry = buildRibbonGeometry(traveled3D, 2 * proj.scaleToScene, 0.06);
 
           remainingMesh.geometry.dispose();
           remainingMesh.geometry = buildDashedRibbonGeometry(
             remaining3D,
-            0.78,
-            0.15
+            2 * proj.scaleToScene,
+            0.065,
+            12 * proj.scaleToScene,
+            8 * proj.scaleToScene
           );
 
           lastProgressHash = progressBucket;
@@ -937,6 +750,7 @@ export function DeliveryMap3D({
         // Courier 3D position & heading rotation
         courier3D = projectLatLngTo3D(cs.position, proj);
         courierRoot.visible = true;
+        courierRoot.scale.setScalar(Math.max(0.15, 5 * proj.scaleToScene));
         motoGroup.visible = !cur.isVan;
         vanGroup.visible = cur.isVan;
 
@@ -994,8 +808,7 @@ export function DeliveryMap3D({
         geofenceGroup.visible = false;
       }
 
-      // 4. Subtle ambient animation (beacon hover + water drift)
-      textures.waterBumpMap.offset.y = (elapsedSec * 0.03) % 1;
+      // 4. Animate delivery pins.
       for (const orb of beaconOrbs) {
         orb.rotation.y = elapsedSec * 1.1;
       }
@@ -1029,7 +842,7 @@ export function DeliveryMap3D({
           controls.target.lerp(desiredTarget, camAlpha);
           camera.position.lerp(desiredCamPos, camAlpha);
         } else if (cur.recenterRequested) {
-          const aspectScale = camera.aspect < 1.15 ? 1.28 : 1.0;
+          const aspectScale = Math.max(1, 1.3 / camera.aspect);
           smoothTarget.set(0, 0, 0);
           desiredCamPos.set(4 * aspectScale, 62 * aspectScale, 76 * aspectScale);
           controls.target.lerp(smoothTarget, camAlpha * 1.4);
@@ -1052,14 +865,14 @@ export function DeliveryMap3D({
         setLabels({
           origin: projectWorldToScreen(
             proj.origin3D.x,
-            6.2,
+            4.2,
             proj.origin3D.z,
             cw,
             ch
           ),
           destination: projectWorldToScreen(
             proj.destination3D.x,
-            6.8,
+            4.2,
             proj.destination3D.z,
             cw,
             ch
@@ -1106,19 +919,10 @@ export function DeliveryMap3D({
       traveledMesh.geometry.dispose();
       remainingMesh.geometry.dispose();
       groundMesh.geometry.dispose();
-      beachMesh.geometry.dispose();
-      oceanMesh.geometry.dispose();
-      lagoonMesh.geometry.dispose();
       geofenceFill.geometry.dispose();
       geofenceRing.geometry.dispose();
 
       groundMat.dispose();
-      beachMat.dispose();
-      waterMat.dispose();
-      buildingMat.dispose();
-      roofUnitMat.dispose();
-      trunkMat.dispose();
-      frondMat.dispose();
       roadBaseMat.dispose();
       traveledMat.dispose();
       remainingMat.dispose();
@@ -1156,6 +960,20 @@ export function DeliveryMap3D({
     >
       {/* Dedicated isolated WebGL canvas container (no sibling React children inside!) */}
       <div ref={mountRef} className="w-full h-full" />
+
+      <div className="absolute top-16 left-3 right-3 sm:right-auto sm:max-w-sm z-20 rounded-lg bg-white/95 dark:bg-[#111916]/95 px-3 py-2 text-xs text-[#2B3731] dark:text-[#D7E0DC] shadow-sm">
+        <p>3D géographique · <a className="underline" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap</a> · Itinéraire © Google Maps</p>
+        <p className="mt-1">Hauteurs estimées en gris · Repères de livraison symboliques</p>
+        <div role="status" aria-live="polite" className="mt-1">
+          {geography.loading ? 'Chargement des bâtiments et des rues…'
+            : geography.data ? `${geography.data.buildingCount} bâtiments · ${geography.data.estimatedBuildings} hauteurs estimées. Couverture OSM partielle.` : null}
+        </div>
+        {geography.error && <div role="alert" className="mt-1">
+          <p>{geography.error} Le décor géographique n’est pas affiché.</p>
+          <button type="button" onClick={geography.retry} className="underline mt-1 mr-3">Réessayer le décor</button>
+          <button type="button" onClick={() => onChangeMapMode('2d')} className="underline">Maps 2D</button>
+        </div>}
+      </div>
 
       {/* Projected 3D Spatial Landmarks Labels (solid/rgba surfaces — zero backdrop-filter over WebGL) */}
       {!webglError && route && (
@@ -1443,7 +1261,7 @@ export function DeliveryMap3D({
           <div className="bg-white dark:bg-[#111916] border border-[#DFE4E0] dark:border-[#25332D] rounded-xl px-5 py-3.5 shadow-sm flex items-center gap-3">
             <span className="w-4 h-4 rounded-full border-2 border-[#0F3D2E] dark:border-[#34D399] border-t-transparent animate-spin" />
             <span className="text-sm font-medium text-[#111815] dark:text-[#EEF2F0]">
-              Génération de la carte 3D de Cotonou…
+              Chargement de l’itinéraire…
             </span>
           </div>
         </div>
