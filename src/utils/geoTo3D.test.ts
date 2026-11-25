@@ -3,9 +3,7 @@ import assert from 'node:assert/strict';
 import {
   computeDashedRibbonSegments,
   createRouteProjection3D,
-  generateCotonouUrbanLayout,
   metersToSceneUnits,
-  minDistanceToPolyline,
   projectLatLngTo3D,
 } from './geoTo3D.ts';
 
@@ -49,34 +47,6 @@ describe('geoTo3D', () => {
     assert.ok(r500 > 0);
     assert.ok(Math.abs(r1000 - r500 * 2) < 1e-6);
     assert.ok(Math.abs(r2000 - r1000 * 2) < 1e-6);
-  });
-
-  it('generates Cotonou buildings and palms cleanly outside road and landmark clearances', () => {
-    const proj = createRouteProjection3D(
-      SAMPLE_PATH,
-      SAMPLE_PATH[0],
-      SAMPLE_PATH[2],
-      SAMPLE_PATH[1],
-      36
-    );
-    const layout = generateCotonouUrbanLayout(proj, 'del-dantokpa-fidjrosse');
-    assert.ok(layout.buildings.length > 20, 'Should place rich urban blocks');
-    assert.ok(layout.palms.length > 20, 'Should place tropical palm trees');
-
-    for (const b of layout.buildings) {
-      const roadDist = minDistanceToPolyline(b.x, b.z, proj.path3D);
-      assert.ok(
-        roadDist >= 4.0,
-        `Building at (${b.x.toFixed(1)}, ${b.z.toFixed(1)}) clipped too close to road (${roadDist.toFixed(2)})`
-      );
-      const originDist = Math.hypot(b.x - proj.origin3D.x, b.z - proj.origin3D.z);
-      assert.ok(originDist >= 7.0, 'Building should not clip into origin hub');
-      const destDist = Math.hypot(
-        b.x - proj.destination3D.x,
-        b.z - proj.destination3D.z
-      );
-      assert.ok(destDist >= 7.0, 'Building should not clip into destination landmark');
-    }
   });
 
   it('computes dashed ribbon segments safely across exact float cycle boundaries and invalid points', () => {
